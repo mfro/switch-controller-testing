@@ -3,6 +3,10 @@
 #include "bt_device.h"
 #include "bt_command.h"
 
+#include <thread>
+
+#include <unistd.h>
+
 namespace bt
 {
 

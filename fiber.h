@@ -3,6 +3,8 @@
 
 #include "common.h"
 
+#include <queue>
+
 struct identity;
 
 namespace fiber

@@ -4,6 +4,9 @@
 #include "bt_command.h"
 #include "bt_channel.h"
 
+#include <unistd.h>
+#include <fcntl.h>
+
 namespace bt
 {
 

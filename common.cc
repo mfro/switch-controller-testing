@@ -1,5 +1,9 @@
 #include "common.h"
 
+#include <iomanip>
+#include <sstream>
+#include <iostream>
+
 using namespace std;
 
 void error(const string &str)

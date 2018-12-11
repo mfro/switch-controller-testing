@@ -6,6 +6,9 @@
 #include "bt_channel.h"
 #include "bt_device.h"
 
+#include <bitset>
+#include <chrono>
+
 static bt::adapter hci(0);
 static bdaddr_t self;
 static bdaddr_t pro_addr;
@@ -118,7 +121,7 @@ void start_adapter()
                 printf("sent %02x\n", leds);
             }
 
-            std::cout << buttons << std::endl;
+            printf("%s\n", buttons.to_string().c_str());
         }
         else
         {

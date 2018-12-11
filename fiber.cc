@@ -1,6 +1,12 @@
 #include "fiber.h"
 
 #include <cassert>
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+
+#include <setjmp.h>
+#include <ucontext.h>
 
 #ifdef DEBUG
 #include <valgrind/valgrind.h>

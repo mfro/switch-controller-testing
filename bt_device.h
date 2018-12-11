@@ -4,6 +4,8 @@
 #include "fiber.h"
 #include "common.h"
 
+#include <bluetooth/l2cap.h>
+
 namespace bt
 {
 

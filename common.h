@@ -1,42 +1,15 @@
 #ifndef COMMON_H
 #define COMMON_H
 
-#include <stack>
-#include <queue>
 #include <vector>
 #include <string>
-#include <fstream>
-#include <iomanip>
-#include <iostream>
-#include <sstream>
-#include <set>
-#include <map>
-#include <unordered_set>
 #include <unordered_map>
 
-#include <bitset>
-#include <tuple>
-#include <chrono>
-#include <mutex>
-#include <thread>
-#include <condition_variable>
 #include <functional>
 
-#include <cstdio>
-#include <cstring>
-
 #include <limits.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <setjmp.h>
-#include <ucontext.h>
-#include <sys/socket.h>
 #include <bluetooth/bluetooth.h>
 #include <bluetooth/hci.h>
-#include <bluetooth/l2cap.h>
-#include <bluetooth/sdp.h>
-#include <bluetooth/sdp_lib.h>
 
 using u8 = uint8_t;
 using u16 = uint16_t;
