@@ -17,6 +17,8 @@ class adapter
 public:
     u8 send_buffer[HCI_MAX_FRAME_SIZE];
 
+    emitter<block> inquiry_result;
+
     adapter(int num);
     ~adapter();
 

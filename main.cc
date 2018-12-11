@@ -13,6 +13,22 @@ static bdaddr_t switch_addr;
 
 void start_adapter()
 {
+    hci.start_inquiry(0x9e8b33, 0x30, 255);
+
+    while (true)
+    {
+        block pkt;
+        hci.inquiry_result.next(&pkt);
+
+        auto count = pkt.read_u8();
+        auto info = pkt.advance<extended_inquiry_info>();
+        if (info->bdaddr != pro_addr)
+            continue;
+
+        hci.stop_inquiry();
+        break;
+    }
+
     bt::device pro(hci, pro_addr);
     pro.connect(0xcc18, 0x02, 0x00, 0x00);
     printf("waiting for connect\n");

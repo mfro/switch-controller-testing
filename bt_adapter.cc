@@ -258,16 +258,13 @@ void adapter::run()
                 break;
             }
 
-                // case EVT_INQUIRY_RESULT:
-                // case EVT_INQUIRY_RESULT_WITH_RSSI:
-                // case EVT_EXTENDED_INQUIRY_RESULT:
-                // {
-                //     if (!inquiry_handler)
-                //         return;
-
-                //     inquiry_handler->emit(pkt);
-                //     break;
-                // }
+            case EVT_INQUIRY_RESULT:
+            case EVT_INQUIRY_RESULT_WITH_RSSI:
+            case EVT_EXTENDED_INQUIRY_RESULT:
+            {
+                inquiry_result.emit(pkt);
+                break;
+            }
 
             case EVT_NUM_COMP_PKTS:
             {
