@@ -1,7 +1,10 @@
 #include "fiber.h"
 
 #include <cassert>
+
+#ifdef DEBUG
 #include <valgrind/valgrind.h>
+#endif
 
 static const unsigned int STACK_SIZE = 1024 * 256;
 
@@ -19,6 +22,8 @@ struct fiber_context
 {
     char stack[STACK_SIZE];
     identity id;
+
+#ifdef DEBUG
     usize valgrind_handle;
 
     fiber_context()
@@ -30,6 +35,7 @@ struct fiber_context
     {
         VALGRIND_STACK_DEREGISTER(valgrind_handle);
     }
+#endif
 };
 
 // #define fiber_log(...) printf(__VA_ARGS__)

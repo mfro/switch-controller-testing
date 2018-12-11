@@ -256,12 +256,21 @@ struct hash<bdaddr_t>
 {
     size_t operator()(const bdaddr_t &addr) const
     {
-        return (size_t)addr.b[0] |
-               ((size_t)addr.b[1] << 8) |
-               ((size_t)addr.b[2] << 16) |
-               ((size_t)addr.b[3] << 24) |
-               ((size_t)addr.b[4] << 32) |
-               ((size_t)addr.b[5] << 48);
+        size_t value = addr.b[0];
+        if (sizeof(size_t) > 1)
+            value |= (size_t)addr.b[1] << 8;
+        if (sizeof(size_t) > 2)
+            value |= (size_t)addr.b[1] << 16;
+        if (sizeof(size_t) > 3)
+            value |= (size_t)addr.b[2] << 24;
+        if (sizeof(size_t) > 4)
+            value |= (size_t)addr.b[3] << 32;
+        if (sizeof(size_t) > 5)
+            value |= (size_t)addr.b[4] << 40;
+        if (sizeof(size_t) > 6)
+            value |= (size_t)addr.b[5] << 48;
+
+        return value;
     }
 };
 
