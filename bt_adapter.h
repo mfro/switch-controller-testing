@@ -22,7 +22,6 @@ public:
     adapter(int num);
     ~adapter();
 
-    void read();
     void send(usize size);
 
     void attach(command &cmd);
@@ -63,6 +62,7 @@ private:
 
     int fd;
 
+    void feed();
     void run();
 
     template <typename T>

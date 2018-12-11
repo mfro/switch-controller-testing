@@ -9,6 +9,11 @@
 #include <bitset>
 #include <chrono>
 
+using std::chrono::duration_cast;
+using std::chrono::high_resolution_clock;
+using std::chrono::milliseconds;
+using std::chrono::nanoseconds;
+
 static bt::adapter hci(0);
 static bdaddr_t self;
 static bdaddr_t pro_addr;

@@ -12,22 +12,24 @@
 #include <valgrind/valgrind.h>
 #endif
 
+// #define FIBER_DEBUG
+
 static const unsigned int STACK_SIZE = 1024 * 256;
 
 struct fiber_context;
 
 struct identity
 {
-    fiber_context *owner;
     jmp_buf *state;
+#ifdef FIBER_DEBUG
     usize index;
     std::string name;
+#endif
 };
 
 struct fiber_context
 {
     char stack[STACK_SIZE];
-    identity id;
 
 #ifdef DEBUG
     usize valgrind_handle;
@@ -44,22 +46,28 @@ struct fiber_context
 #endif
 };
 
-// #define fiber_log(...) printf(__VA_ARGS__)
-#define fiber_log(...)
-
+#ifdef FIBER_DEBUG
+#define fiber_log(...) printf(__VA_ARGS__)
 static usize next_index = 1;
+#else
+#define fiber_log(...)
+#endif
+
 static usize active_fiber_count;
 
 static identity anchor = {
-    .owner = nullptr,
     .state = nullptr,
+#ifdef FIBER_DEBUG
     .index = 0,
     .name = "anchor",
+#endif
 };
 static identity current = anchor;
 
-static fiber_context *cleanup;
 static std::queue<identity *> ready_queue;
+
+static fiber_context *cleanup;
+static std::vector<fiber_context *> context_pool;
 
 static std::mutex m;
 static std::condition_variable cv;
@@ -71,7 +79,12 @@ static void do_cleanup()
         return;
 
     --active_fiber_count;
-    delete cleanup;
+
+    if (context_pool.size() < 10)
+        context_pool.push_back(cleanup);
+    else
+        delete cleanup;
+
     cleanup = nullptr;
 }
 
@@ -116,7 +129,9 @@ void condition::wait()
     if (setjmp(store) == 0)
         load_state();
 
+#ifdef FIBER_DEBUG
     assert(self.index == current.index);
+#endif
 
     fiber_log("return to %zu %s\n", self.index, self.name.c_str());
     do_cleanup();
@@ -245,7 +260,15 @@ bool fiber::fork()
 void fiber::create(const std::string &name, const std::function<void()> &run)
 {
     ++active_fiber_count;
-    auto ctx = new fiber_context();
+
+    fiber_context *ctx;
+    if (context_pool.empty())
+        ctx = new fiber_context();
+    else
+    {
+        ctx = context_pool.back();
+        context_pool.pop_back();
+    }
 
     ucontext_t context;
     context.uc_stack.ss_sp = ctx->stack;
@@ -263,10 +286,10 @@ void fiber::create(const std::string &name, const std::function<void()> &run)
 
     if (setjmp(store) == 0)
     {
-        current.owner = ctx;
+#ifdef FIBER_DEBUG
         current.index = next_index++;
         current.name = name;
-        // current.owner = ctx;
+#endif
         setcontext(&context);
     }
 

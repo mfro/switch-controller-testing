@@ -33,7 +33,7 @@ adapter::adapter(int num)
         return;
     }
 
-    std::thread([this] { read(); }).detach();
+    std::thread([this] { feed(); }).detach();
     fiber::create("adapter", [this] { run(); });
 }
 
@@ -66,7 +66,7 @@ void adapter::detach(device &dev)
         connections.erase(dev.handle);
 }
 
-void adapter::read()
+void adapter::feed()
 {
     while (true)
     {
