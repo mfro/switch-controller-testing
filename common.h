@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include <limits.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -257,18 +258,22 @@ struct hash<bdaddr_t>
     size_t operator()(const bdaddr_t &addr) const
     {
         size_t value = addr.b[0];
+#if UINTPTR_MAX >= UINT16_MAX
         if (sizeof(size_t) > 1)
             value |= (size_t)addr.b[1] << 8;
+#if UINTPTR_MAX >= UINT32_MAX
         if (sizeof(size_t) > 2)
-            value |= (size_t)addr.b[1] << 16;
+            value |= (size_t)addr.b[2] << 16;
         if (sizeof(size_t) > 3)
-            value |= (size_t)addr.b[2] << 24;
+            value |= (size_t)addr.b[3] << 24;
+#if UINTPTR_MAX >= UINT64_MAX
         if (sizeof(size_t) > 4)
-            value |= (size_t)addr.b[3] << 32;
+            value |= (size_t)addr.b[4] << 32;
         if (sizeof(size_t) > 5)
-            value |= (size_t)addr.b[4] << 40;
-        if (sizeof(size_t) > 6)
-            value |= (size_t)addr.b[5] << 48;
+            value |= (size_t)addr.b[5] << 40;
+#endif
+#endif
+#endif
 
         return value;
     }
