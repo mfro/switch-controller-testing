@@ -51,6 +51,80 @@ void start_adapter()
     hid_control.configure();
     hid_interrupt.configure();
 
+    printf("done\n");
+
+    u8 previous_leds = 0xFF;
+
+    while (true)
+    {
+        block input;
+        hid_interrupt.data.next(&input);
+
+        input.read_u8();
+        auto type = input.read_u8();
+        if (type == 0x3f)
+        {
+            auto b1 = input.read_u8();
+            auto b2 = input.read_u8();
+            auto hat = input.read_u8();
+            auto s1 = input.read_u16();
+            auto s2 = input.read_u16();
+            auto s3 = input.read_u16();
+            auto s4 = input.read_u16();
+
+            std::bitset<16> buttons;
+            buttons[0] = b2 & 0x01;  // minus
+            buttons[1] = b2 & 0x02;  // plus
+            buttons[2] = b2 & 0x04;  // lstick
+            buttons[3] = b2 & 0x08;  // rstick
+            buttons[4] = b2 & 0x10;  // home
+            buttons[5] = b2 & 0x20;  // capture
+            buttons[6] = b2 & 0x40;  // 0
+            buttons[7] = b2 & 0x80;  // 0
+            buttons[8] = b1 & 0x01;  // B
+            buttons[9] = b1 & 0x02;  // A
+            buttons[10] = b1 & 0x04; // Y
+            buttons[11] = b1 & 0x08; // X
+            buttons[12] = b1 & 0x10; // L
+            buttons[13] = b1 & 0x20; // R
+            buttons[14] = b1 & 0x40; // ZL
+            buttons[15] = b1 & 0x80; // ZR
+
+            auto leds = b1;
+            if (leds != previous_leds)
+            {
+                // printf("check %02x %02x\n", leds, previous_leds);
+                previous_leds = leds;
+                u8 cmd[13];
+                frame send_pkt(cmd, sizeof(cmd));
+                send_pkt.write_u8(0xa2);
+                send_pkt.write_u8(0x01);
+                send_pkt.write_u8(0x00);
+
+                send_pkt.write_u8(0x00);
+                send_pkt.write_u8(0x01);
+                send_pkt.write_u8(0x40);
+                send_pkt.write_u8(0x40);
+
+                send_pkt.write_u8(0x00);
+                send_pkt.write_u8(0x01);
+                send_pkt.write_u8(0x40);
+                send_pkt.write_u8(0x40);
+
+                send_pkt.write_u8(0x30);
+                send_pkt.write_u8(leds);
+
+                hid_interrupt.send(block(cmd, send_pkt.size));
+                printf("sent %02x\n", leds);
+            }
+
+            std::cout << buttons << std::endl;
+        }
+        else
+        {
+        }
+    }
+
     pro.disconnect(0x13);
 }
 
