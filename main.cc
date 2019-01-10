@@ -8,11 +8,17 @@
 
 #include <bitset>
 #include <chrono>
+#include <arpa/inet.h>
 
 using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
 using std::chrono::milliseconds;
 using std::chrono::nanoseconds;
+
+// A,B,X,Y
+// up,down,left,right
+// l-bumper,r-bumper,l-stick,r-stick
+// start,back,guide,capture
 
 static bt::adapter hci(0);
 static bdaddr_t self;
@@ -63,6 +69,19 @@ void start_adapter()
 
     u8 previous_leds = 0xFF;
 
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in remote = {0};
+    remote.sin_family = AF_INET;
+    remote.sin_port = 25565;
+    inet_pton(AF_INET, "10.0.1.32", &remote.sin_addr);
+
+    printf("connecting...\n");
+
+    if (connect(sock, (sockaddr *)&remote, sizeof(remote)) < 0)
+        error("failed to connect");
+
+    printf("connected to feeder\n");
+
     while (true)
     {
         block input;
@@ -79,6 +98,29 @@ void start_adapter()
             auto s2 = input.read_u16();
             auto s3 = input.read_u16();
             auto s4 = input.read_u16();
+
+            u8 report[20];
+            memset(&report, 0, sizeof(report));
+
+            report[0] = (b1 & 0x02) |        // A
+                        ((b1 & 0x01) << 1) | // B
+                        ((b1 & 0x08) << 2) | // X
+                        ((b1 & 0x04) << 3) | // Y
+                        ((0) << 4) |         // UP
+                        ((0) << 5) |         // DOWN
+                        ((0) << 6) |         // LEFT
+                        ((0) << 7);          // RIGHT
+
+            report[1] = (b1 & 0x10) |        // l-bumper
+                        ((b1 & 0x20) << 1) | // r-bumper
+                        ((b2 & 0x04) << 2) | // l-stick
+                        ((b2 & 0x08) << 3) | // r-stick
+                        ((b2 & 0x02) << 4) | // start
+                        ((b2 & 0x01) << 5) | // back
+                        ((b2 & 0x10) << 6) | // guide
+                        ((b2 & 0x20) << 7);  // capture
+
+            send(sock, &report, sizeof(report), 0);
 
             std::bitset<16> buttons;
             buttons[0] = b2 & 0x01;  // minus
