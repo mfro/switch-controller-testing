@@ -61,9 +61,11 @@ private:
     std::unordered_map<u16, device &> connections;
 
     int fd;
+    bool handled = false;
 
     void feed();
     void run();
+    void dispatch(block pkt);
 
     template <typename T>
     void device_event(block &pkt)

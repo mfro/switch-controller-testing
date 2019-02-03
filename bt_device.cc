@@ -53,6 +53,19 @@ void device::encrypt(u8 mode)
     valid_status(cmd.run<u8>());
 }
 
+void device::qos_setup(u8 flags, u8 service_type, u32 token_rate, u32 peak_bw, u32 latency, u32 delay_variation)
+{
+    command cmd(hci, 0x02, 0x0007);
+    cmd.write_u16(htobs(handle));
+    cmd.write_u8(flags);
+    cmd.write_u8(service_type);
+    cmd.write_u32(htobl(token_rate));
+    cmd.write_u32(htobl(peak_bw));
+    cmd.write_u32(htobl(latency));
+    cmd.write_u32(htobl(delay_variation));
+    valid_status(cmd.run<u8>());
+}
+
 void device::disconnect(u8 reason)
 {
     command cmd(hci, 0x01, 0x0006);
@@ -311,14 +324,14 @@ void device::event(evt_conn_request *evt)
         command cmd(hci, 0x01, 0x000A);
         cmd.write(addr);
         cmd.write_u8(0x13);
-        cmd.send();
+        valid_status(cmd.run<u8>());
     }
     else
     {
         command cmd(hci, 0x01, 0x0009);
         cmd.write(addr);
         cmd.write_u8(accepting);
-        cmd.send();
+        valid_status(cmd.run<u8>());
     }
 }
 
@@ -476,8 +489,7 @@ void device::event(evt_io_capability_request *evt)
     cmd.write_u8(0x03);
     cmd.write_u8(0x00);
     cmd.write_u8(0x00);
-
-    cmd.send();
+    valid_status(cmd.run<u8>());
 }
 
 void device::event(evt_io_capability_response *evt)
@@ -488,7 +500,7 @@ void device::event(evt_user_confirm_request *evt)
 {
     command cmd(hci, 0x01, 0x002C); // 0x002D: deny. 0x002C: accept
     cmd.write(addr);
-    cmd.send();
+    valid_status(cmd.run<u8>());
 }
 
 void device::event(evt_user_passkey_request *evt)

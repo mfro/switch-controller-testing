@@ -74,6 +74,7 @@ void adapter::feed()
         if (result > 0)
         {
             // printf("read %d\n", result);
+            handled = false;
             fiber::input([&] { recv.emit(result); });
         }
         else
@@ -81,31 +82,6 @@ void adapter::feed()
             error("read failed");
         }
     }
-
-    // if (errno == EPIPE)
-    // {
-    //     while (true)
-    //     {
-    //         std::this_thread::sleep_for(std::chrono::milliseconds(250));
-
-    //         fd = socket(AF_BLUETOOTH, SOCK_RAW, BTPROTO_HCI);
-    //         sockaddr_hci addr;
-    //         memset(&addr, 0, sizeof(addr));
-    //         addr.hci_family = AF_BLUETOOTH;
-    //         addr.hci_dev = 0;
-    //         addr.hci_channel = HCI_CHANNEL_USER;
-    //         if (bind(fd, (sockaddr *)&addr, sizeof(addr)) < 0)
-    //         {
-    //             perror("failed bind");
-    //             continue;
-    //         }
-
-    //         break;
-    //     }
-    // }
-    // else
-    // {
-    // }
 }
 
 void adapter::send(usize size)
@@ -120,6 +96,38 @@ void adapter::send(usize size)
 }
 
 void adapter::run()
+{
+    static usize available = 0;
+
+    ++available;
+
+    while (available < 3)
+    {
+        usize size;
+        recv.next(&size);
+
+        if (handled)
+            continue;
+
+        handled = true;
+
+        if (size == 0)
+            continue;
+
+        --available;
+
+        if (available == 0)
+            fiber::create("adapter", [this] { run(); });
+
+        dispatch(block(recv_buffer, size));
+
+        ++available;
+    }
+
+    --available;
+}
+
+void adapter::dispatch(block pkt)
 {
     static const std::vector<void (adapter::*)(block & pkt)> event_handlers{
         /*00*/ nullptr,
@@ -202,106 +210,94 @@ void adapter::run()
         /*4d*/ nullptr, // AMP status change
     };
 
-    while (true)
+    auto type = pkt.read_u8();
+
+    if (type == HCI_ACLDATA_PKT)
     {
-        usize size;
-        recv.next(&size);
+        auto hdr = pkt.advance<hci_acl_hdr>();
+        if (!hdr)
+            return;
 
-        // printf("run %zu\n", size);
+        auto handle = htobs(btohs(hdr->handle) & 0xFFF);
+        auto dev = connections.find(handle);
+        if (dev == connections.end())
+            return;
 
-        if (size == 0)
-            continue;
+        dev->second.acldata(pkt);
+    }
+    else if (type == HCI_EVENT_PKT)
+    {
+        auto hdr = pkt.advance<hci_event_hdr>();
+        if (!hdr)
+            return;
 
-        block pkt(recv_buffer, size);
+        // printf("event %x\n", hdr->evt);
 
-        auto type = pkt.read_u8();
-        if (type == HCI_ACLDATA_PKT)
+        switch (hdr->evt)
         {
-            auto hdr = pkt.advance<hci_acl_hdr>();
-            if (!hdr)
-                continue;
+        case EVT_CMD_COMPLETE:
+        {
+            auto evt = pkt.advance<evt_cmd_complete>();
+            // printf("complete %x\n", btohs(evt->opcode));
+            auto cmd = commands.find(btohs(evt->opcode));
+            if (cmd == commands.end())
+                return;
 
-            auto handle = htobs(btohs(hdr->handle) & 0xFFF);
-            auto dev = connections.find(handle);
-            if (dev == connections.end())
-                continue;
-
-            dev->second.acldata(pkt);
+            cmd->second.result.emit(pkt);
+            break;
         }
-        else if (type == HCI_EVENT_PKT)
+
+        case EVT_CMD_STATUS:
         {
-            auto hdr = pkt.advance<hci_event_hdr>();
-            if (!hdr)
-                continue;
+            auto evt = pkt.advance<evt_cmd_status>();
+            // printf("status %x\n", btohs(evt->opcode));
+            auto cmd = commands.find(btohs(evt->opcode));
+            if (cmd == commands.end())
+                return;
 
-            // printf("event %x\n", hdr->evt);
+            cmd->second.result.emit(block(&evt->status, 1));
+            break;
+        }
 
-            switch (hdr->evt)
+        case EVT_INQUIRY_RESULT:
+        case EVT_INQUIRY_RESULT_WITH_RSSI:
+        case EVT_EXTENDED_INQUIRY_RESULT:
+        {
+            inquiry_result.emit(pkt);
+            break;
+        }
+
+        case EVT_NUM_COMP_PKTS:
+        {
+            auto count = pkt.read_u8();
+            auto handles = (u16 *)pkt.data;
+            auto pkt_counts = ((u16 *)pkt.data) + count;
+            for (auto i = 0; i < count; ++i)
             {
-            case EVT_CMD_COMPLETE:
-            {
-                auto evt = pkt.advance<evt_cmd_complete>();
-                // printf("complete %x\n", btohs(evt->opcode));
-                auto cmd = commands.find(btohs(evt->opcode));
-                if (cmd == commands.end())
-                    continue;
-
-                cmd->second.result.emit(pkt);
-                break;
-            }
-
-            case EVT_CMD_STATUS:
-            {
-                auto evt = pkt.advance<evt_cmd_status>();
-                // printf("status %x\n", btohs(evt->opcode));
-                auto cmd = commands.find(btohs(evt->opcode));
-                if (cmd == commands.end())
-                    continue;
-
-                cmd->second.result.emit(block(&evt->status, 1));
-                break;
-            }
-
-            case EVT_INQUIRY_RESULT:
-            case EVT_INQUIRY_RESULT_WITH_RSSI:
-            case EVT_EXTENDED_INQUIRY_RESULT:
-            {
-                inquiry_result.emit(pkt);
-                break;
-            }
-
-            case EVT_NUM_COMP_PKTS:
-            {
-                auto count = pkt.read_u8();
-                auto handles = (u16 *)pkt.data;
-                auto pkt_counts = ((u16 *)pkt.data) + count;
-                for (auto i = 0; i < count; ++i)
+                auto dev = connections.find(handles[i]);
+                if (dev == connections.end())
                 {
-                    auto dev = connections.find(handles[i]);
-                    if (dev == connections.end())
-                    {
-                        printf("connection not found\n");
-                        continue;
-                    }
-
-                    dev->second.full_slots -= btohs(pkt_counts[i]);
-                    dev->second.slots_changed.notify();
-                }
-                break;
-            }
-
-            case EVT_VENDOR:
-                break;
-
-            default:
-            {
-                auto handler = event_handlers[hdr->evt];
-                if (handler == nullptr)
+                    printf("connection not found\n");
                     continue;
+                }
 
-                (this->*handler)(pkt);
+                dev->second.full_slots -= btohs(pkt_counts[i]);
+                dev->second.slots_changed.notify();
             }
-            }
+            break;
+        }
+
+        case EVT_VENDOR:
+            break;
+
+        default:
+        {
+            auto handler = event_handlers[hdr->evt];
+            if (handler == nullptr)
+                return;
+
+            (this->*handler)(pkt);
+        }
         }
     }
 }

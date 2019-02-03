@@ -33,6 +33,8 @@ public:
     void authenticate();
     void encrypt(u8 mode);
 
+    void qos_setup(u8 flags, u8 service_type, u32 token_rate, u32 peak_bw, u32 latency, u32 delay_variation);
+
     void disconnect(u8 reason);
 
     void connect(channel &ch, u16 psm);
