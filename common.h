@@ -78,7 +78,7 @@ struct frame
         if (unused < s)
             error("frame is not large enough");
 
-        memset(data, value, size);
+        memset(data, value, s);
 
         size += s;
         data += s;

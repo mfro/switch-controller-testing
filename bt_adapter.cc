@@ -231,7 +231,7 @@ void adapter::dispatch(block pkt)
         if (!hdr)
             return;
 
-        // printf("event %x\n", hdr->evt);
+        printf("event %02x\n", hdr->evt);
 
         switch (hdr->evt)
         {
@@ -277,7 +277,7 @@ void adapter::dispatch(block pkt)
                 auto dev = connections.find(handles[i]);
                 if (dev == connections.end())
                 {
-                    printf("connection not found\n");
+                    printf("connection not found %04x\n", handles[i]);
                     continue;
                 }
 

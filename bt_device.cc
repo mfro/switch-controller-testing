@@ -76,7 +76,7 @@ void device::disconnect(u8 reason)
 
 void device::connect(channel &ch, u16 psm)
 {
-    auto local_cid = next_cid++;
+    auto local_cid = htobs(next_cid++);
     ch.handle = handle;
     channels.emplace(local_cid, ch);
 
@@ -92,7 +92,10 @@ void device::connect(channel &ch, u16 psm)
     } while (btohs(rsp->result) == 0x0001);
 
     if (rsp->result != 0x0000)
+    {
+        printf("l2cap result %04x\n", rsp->result);
         throw std::runtime_error("l2cap connection failed");
+    }
 
     ch.status = channel_status::CONFIG;
     ch.remote_cid = rsp->dcid;
@@ -100,15 +103,18 @@ void device::connect(channel &ch, u16 psm)
 
 void device::accept(channel &ch, u16 psm)
 {
-    auto local_cid = next_cid++;
     ch.handle = handle;
-    channels.emplace(local_cid, ch);
 
-    promise<u16> accept;
+    promise<std::pair<u16, u16>> accept;
     accepting_psms.emplace(psm, &accept);
 
-    ch.remote_cid = accept.wait();
+    auto cids = accept.wait();
+
+    channels.emplace(cids.first, ch);
+    ch.remote_cid = cids.second;
     ch.status = channel_status::CONFIG;
+
+    printf("accepted %04x (%04x)\n", cids.first, cids.second);
 }
 
 void device::acquire_slot()
@@ -229,13 +235,15 @@ void device::l2cap(u8 ident, l2cap_conn_req *req)
 
         l2cap_reply(ident, L2CAP_CONN_RSP, rsp);
 
-        accept->second->resolve(rsp.scid);
+        accept->second->resolve(std::make_pair(local_cid, (u16)rsp.scid));
         accepting_psms.erase(accept);
     }
 }
 
 void device::l2cap(u8 ident, l2cap_conf_req *req)
 {
+    printf("conf req %04x\n", req->dcid);
+
     auto ch = channels.find(req->dcid);
     if (ch == channels.end() || (ch->second.status != channel_status::OPEN &&
                                  ch->second.status != channel_status::CONFIG))
@@ -385,7 +393,11 @@ void device::event(evt_role_change *evt)
 void device::event(evt_mode_change *evt)
 {
     // if (evt->mode & 0x02)
-    //     hci.exit_sniff_mode(conn);
+    // {
+    //     command cmd(hci, 0x02, 0x004);
+    //     cmd.write_u16(handle);
+    //     cmd.send();
+    // }
 }
 
 void device::event(evt_pin_code_req *evt)

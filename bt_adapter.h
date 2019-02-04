@@ -91,7 +91,7 @@ private:
         auto dev = connections.find(evt->handle);
         if (dev == connections.end())
         {
-            printf("connection not found\n");
+            printf("connection not found %04x\n", evt->handle);
             return;
         }
         dev->second.event(evt);

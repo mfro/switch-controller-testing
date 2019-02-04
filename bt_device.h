@@ -42,7 +42,7 @@ public:
 
 private:
     std::unordered_map<u8, promise<block> *> l2cap_commands;
-    std::unordered_map<u16, promise<u16> *> accepting_psms;
+    std::unordered_map<u16, promise<std::pair<u16, u16>> *> accepting_psms;
     std::unordered_map<u16, channel &> channels;
     adapter &hci;
 
