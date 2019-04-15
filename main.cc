@@ -12,8 +12,9 @@
 #include <chrono>
 #include <arpa/inet.h>
 
-#include <unistd.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <assert.h>
 
 using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
@@ -73,7 +74,7 @@ void debug_pro()
         block pkt;
         hci.inquiry_result.next(&pkt);
 
-        auto count = pkt.read_u8();
+        pkt.read_u8();
         auto info = pkt.advance<extended_inquiry_info>();
         if (info->bdaddr != pro_addr)
             continue;
@@ -107,7 +108,6 @@ void debug_pro()
     printf("done\n");
 
     u8 previous_leds = 0xFF;
-    int counter = 0;
 
     while (true)
     {
@@ -120,11 +120,11 @@ void debug_pro()
         {
             auto b1 = input.read_u8();
             auto b2 = input.read_u8();
-            auto hat = input.read_u8();
-            auto s1 = input.read_u16();
-            auto s2 = input.read_u16();
-            auto s3 = input.read_u16();
-            auto s4 = input.read_u16();
+            /* auto hat = */ input.read_u8();
+            /* auto s1 = */ input.read_u16();
+            /* auto s2 = */ input.read_u16();
+            /* auto s3 = */ input.read_u16();
+            /* auto s4 = */ input.read_u16();
 
             // u8 report[20];
             // memset(&report, 0, sizeof(report));
@@ -436,9 +436,9 @@ void fake_pro()
         auto type = pkt.read_u8();
         if (type == 0x01)
         {
-            auto rumbleTiming = pkt.read_u8();
-            auto lRumble = pkt.read_u32();
-            auto rRumble = pkt.read_u32();
+            /*auto rumbleTiming = */ pkt.read_u8();
+            /*auto lRumble =      */ pkt.read_u32();
+            /*auto rRumble =      */ pkt.read_u32();
             auto cmdId = pkt.read_u8();
 
             u8 reply[50];
@@ -574,8 +574,8 @@ void fake_pro()
         }
         else if (type == 0x10)
         {
-            auto lRumble = pkt.read_u32();
-            auto rRumble = pkt.read_u32();
+            // auto lRumble = pkt.read_u32();
+            // auto rRumble = pkt.read_u32();
         }
     }
 }
@@ -605,7 +605,7 @@ void inspect_pro()
         block pkt;
         hci.inquiry_result.next(&pkt);
 
-        auto count = pkt.read_u8();
+        pkt.read_u8();
         auto info = pkt.advance<extended_inquiry_info>();
         if (info->bdaddr != pro_addr)
             continue;
@@ -664,7 +664,7 @@ void inspect_pro()
         while (pkt.data[1] != 0x21);
 
         u8 count_recv = pkt.data[20];
-        printf("%x %x\n", count, count_recv);
+        printf("%zx %x\n", count, count_recv);
 
         pairing_info.write(pkt.data + 21, count);
     }
@@ -772,6 +772,186 @@ void proxy_pro()
     });
 
     pipe(console_data, pro_data);
+}
+
+u8 thing_checksum(const block &data)
+{
+    u8 sum = 0;
+
+    for (usize i = 0; i < data.size; ++i)
+        sum += data.data[i];
+
+    return (-sum) & 0xFF;
+}
+
+void dump_mem(bt::channel &hid, u32 addr, u32 size, const char *out)
+{
+    int romFd = open(out, O_WRONLY | O_TRUNC | O_CREAT);
+    if (romFd < 0)
+    {
+        perror("failed to open tmp");
+        return;
+    }
+
+    u32 block_size = size;
+    while (block_size >= 0xf0)
+        block_size >>= 1;
+
+    printf("dump @ 0x%x 0x%x to '%s' block %x\n", addr, size, out, block_size);
+
+    u8 hid_buffer[1024];
+
+    frame hid_send(hid_buffer, sizeof(hid_buffer));
+    hid_send.write_u8(0x53);                      // HID SET_REPORT FEATURE
+    hid_send.write_u8(0x71);                      // SETUP_READ
+    hid_send.write_u32(htole32(addr));            // addr
+    hid_send.write_u16(htole16((u16)block_size)); // len
+    hid_send.write_u8(thing_checksum(block(hid_buffer + 1, 7)));
+    hid.send(block(hid_buffer, hid_send.size));
+    block recv;
+    hid.data.next(&recv);
+
+    for (usize i = 0; i < size;)
+    {
+        hid_send = frame(hid_buffer, sizeof(hid_buffer));
+        hid_send.write_u8(0x43); // HID GET_REPORT FEATURE
+        hid_send.write_u8(0x72); // READ
+        // no checksum?
+
+        hid.send(block(hid_buffer, hid_send.size));
+        hid.data.next(&recv);
+
+        u8 hidp = recv.read_u8();
+        u8 cksm = thing_checksum(block(recv.data, 7 + block_size));
+
+        u8 opcode = recv.read_u8();
+        u32 rsp_addr = le32toh(recv.read_u32());
+        u16 rsp_len = le16toh(recv.read_u16());
+
+        const u8 *rsp_data = recv.data;
+        recv.skip(rsp_len);
+        u8 rsp_cksm = recv.read_u8();
+
+        assert(hidp == 0xa3);
+        assert(rsp_addr == addr + i);
+        assert(rsp_len == block_size);
+
+        if (cksm == rsp_cksm)
+        {
+            printf("%zx\n", i);
+            write(romFd, rsp_data, rsp_len);
+            i += block_size;
+        }
+        else
+        {
+            printf("%zx CHECKSUM FAIL\n", i);
+            hid_send = frame(hid_buffer, sizeof(hid_buffer));
+            hid_send.write_u8(0x53);                      // HID SET_REPORT FEATURE
+            hid_send.write_u8(0x71);                      // SETUP_READ
+            hid_send.write_u32(htole32(addr + i));        // addr
+            hid_send.write_u16(htole16((u16)block_size)); // len
+            hid_send.write_u8(thing_checksum(block(hid_buffer + 1, 7)));
+            hid.send(block(hid_buffer, hid_send.size));
+            hid.data.next(&recv);
+        }
+    }
+
+    close(romFd);
+
+    printf("dump complete\n");
+}
+
+void dump_pro()
+{
+    hci.start_inquiry(0x9e8b33, 0x30, 255);
+
+    while (true)
+    {
+        block pkt;
+        hci.inquiry_result.next(&pkt);
+
+        pkt.read_u8();
+        auto info = pkt.advance<extended_inquiry_info>();
+        if (info->bdaddr != pro_addr)
+            continue;
+
+        hci.stop_inquiry();
+        break;
+    }
+
+    bt::device pro(hci, pro_addr);
+    pro.connect(0xcc18, 0x02, 0x00, 0x00);
+    printf("waiting for connect\n");
+    pro.connected.wait();
+
+    pro.authenticate();
+    printf("waiting for authenticate\n");
+    pro.authenticated.wait();
+
+    pro.encrypt(0x01);
+    printf("waiting for encrypt\n");
+    pro.encrypted.wait();
+
+    bt::channel hid_control(pro);
+    bt::channel hid_interrupt(pro);
+
+    pro.connect(hid_control, 0x11);
+    pro.connect(hid_interrupt, 0x13);
+
+    hid_control.configure();
+    hid_interrupt.configure();
+
+    block pkt;
+    hid_interrupt.data.next(&pkt);
+
+    printf("dumping...\n");
+
+    // dump_mem(hid_control, 0x00000000, 0xC8000, "rom1");
+    // dump_mem(hid_control, 0x00260000, 0x0C000, "rom2");
+    dump_mem(hid_control, 0xF8000000, 0x80000, "spi1");
+
+    return;
+
+    int fd = open("tmp", O_WRONLY | O_TRUNC | O_CREAT);
+    if (fd < 0)
+    {
+        perror("failed to open tmp");
+        return;
+    }
+
+    usize mem_idx = 0;
+    usize mem_end = 0x80000;
+
+    while (mem_idx < mem_end)
+    {
+        usize count = std::min((usize)0x1d, mem_end - mem_idx);
+
+        u8 buffer[1024];
+
+        frame send(buffer, sizeof(buffer));
+        send.write_u8(0xa2);            // HID OUTPUT
+        send.write_u8(0x01);            // OUTPUT 0x01
+        send.write_u8(0x00);            // rumble timing
+        send.write_u8(0x00, 8);         // rumble data
+        send.write_u8(0x10);            // READ SPI
+        send.write_u32(htobl(mem_idx)); // addr
+        send.write_u8(count);           // maximum size = 0x1d
+
+        hid_interrupt.send(block(buffer, send.size));
+
+        do
+            hid_interrupt.data.next(&pkt);
+        while (pkt.data[1] != 0x21);
+
+        u8 count_recv = pkt.data[20];
+        printf("0x%zx 0x%zx 0x%x\n", mem_idx, count, count_recv);
+
+        write(fd, pkt.data + 21, count);
+
+        mem_idx += count;
+    }
+
+    close(fd);
 }
 
 void sdp_host(bt::device &device)
@@ -1040,10 +1220,60 @@ int main(int argc, char **argv)
     str2ba("dc:68:eb:3b:f8:46", &pro_addr);
     str2ba("b8:8a:ec:91:17:c2", &switch_addr);
 
+    int fd = open("tmp0", O_RDONLY);
+    u8 content[100 * 1024];
+    read(fd, &content, sizeof(content));
+
+    block data(content, sizeof(content));
+    while (data.size > 0) {
+        usize idx = (usize)(data.data - content);
+        u8 type = data.read_u8();
+        u16 size = le16toh(data.read_u16());
+        auto body = data.data;
+        data.skip(size);
+
+        printf("@%04zx x%02x: x%04x\n", idx , type, size);
+        if (type == 0xfe) break;
+    }
+
+    return 0;
+
+    // int fd = open("pro_spi.bin", O_RDONLY);
+    // if (fd < 0)
+    // {
+    //     perror("failed to open bin");
+    //     return 1;
+    // }
+
+    // lseek(fd, 0x10000, SEEK_SET);
+
+    // u8 data[0x70000];
+    // read(fd, &data, sizeof(data));
+    // u64 check = 0xFFFFFFFFFFFFFFFF;
+
+    // usize counter = 0;
+    // usize block_start = 0;
+    // for (int i = 0; i < sizeof(data); ++i)
+    // {
+    //     auto ptr = (u64 *)&data[i];
+    //     if (*ptr != check)
+    //         continue;
+
+    //     char tmp[10];
+    //     sprintf(tmp, "tmp%zu", counter++);
+    //     int fdOut = open(tmp, O_WRONLY | O_TRUNC | O_CREAT);
+
+    //     write(fdOut, &data[block_start], i - block_start);
+    //     close(fdOut);
+    //     while (data[i] == 0xFF)
+    //         ++i;
+    // }
+
+    // return 0;
     // fiber::create("reset", [] { csr_set_bdaddr(self); });
     fiber::create("main", [] {
         configure_adapter();
-        proxy_pro();
+        dump_pro();
     });
 
     while (true)

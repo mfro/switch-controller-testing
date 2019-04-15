@@ -231,7 +231,7 @@ void adapter::dispatch(block pkt)
         if (!hdr)
             return;
 
-        printf("event %02x\n", hdr->evt);
+        // printf("event %02x\n", hdr->evt);
 
         switch (hdr->evt)
         {

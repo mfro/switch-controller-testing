@@ -14,7 +14,8 @@
 
 // #define FIBER_DEBUG
 
-static const unsigned int STACK_SIZE = 1024 * 256;
+static const unsigned int STACK_SIZE = 1024 * 1024;
+// static const unsigned int STACK_SIZE = 1024 * 256;
 
 struct fiber_context;
 
