@@ -10,11 +10,15 @@
 
 #include <bitset>
 #include <chrono>
+#include <thread>
 #include <arpa/inet.h>
 
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+
+#include <fstream>
+#include <sstream>
 
 using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
@@ -63,6 +67,21 @@ void csr_set_bdaddr(const bdaddr_t &addr)
     bt::command reset(hci, OGF_VENDOR_CMD, 0x00);
     reset.write(reset_pkt);
     reset.send();
+}
+
+void intel_set_bdaddr(const bdaddr_t &addr)
+{
+    hci.reset();
+
+    printf("reset\n");
+
+    block rsp;
+
+    bt::command set_addr(hci, OGF_VENDOR_CMD, 0x31);
+    set_addr.write(addr);
+    set_addr.send();
+
+    hci.reset();
 }
 
 void debug_pro()
@@ -222,7 +241,7 @@ void debug_pro()
                 //                printf("sent %02x\n", leds);
             }
 
-            //          printf("%s\n", buttons.to_string().c_str());
+            printf("%s\n", buttons.to_string().c_str());
         }
         else
         {
@@ -248,6 +267,8 @@ struct __attribute__((packed)) report_x30
     u8 vibration = 0x00;
     u8 spatialdata[36];
 
+    report_x30() : report_x30(0, 0, 0x800, 0x800, 0x800, 0x800) {}
+
     report_x30(u8 timer, u32 buttons, u16 slx, u16 sly, u16 srx, u16 sry) : timer(timer)
     {
         b1 = buttons & 0xFF;
@@ -261,6 +282,136 @@ struct __attribute__((packed)) report_x30
         sr3 = sry >> 4;
     }
 };
+
+static condition manual_cv;
+static std::pair<usize, report_x30> manual(0, report_x30());
+static bool run_script = false;
+static bool manual_input = false;
+
+void read_console()
+{
+    char *line;
+    usize len;
+
+    while (getline(&line, &len, stdin) != -1)
+    {
+        std::stringstream src(line);
+
+        std::string btn;
+        usize delay;
+
+        if (!(src >> btn))
+            continue;
+
+        if (btn == "run")
+        {
+            run_script = true;
+        }
+        else
+        {
+            if (!(src >> delay))
+                continue;
+
+            if (btn == "up")
+                manual.second.b3 |= 0x02;
+            else if (btn == "down")
+                manual.second.b3 |= 0x01;
+            else if (btn == "left")
+                manual.second.b3 |= 0x08;
+            else if (btn == "right")
+                manual.second.b3 |= 0x04;
+            else if (btn == "a")
+                manual.second.b1 |= 0x08;
+            else if (btn == "b")
+                manual.second.b1 |= 0x04;
+            else if (btn == "x")
+                manual.second.b1 |= 0x02;
+            else if (btn == "y")
+                manual.second.b1 |= 0x01;
+            else if (btn == "minus")
+                manual.second.b2 |= 0x01;
+            else if (btn == "plus")
+                manual.second.b2 |= 0x02;
+            else if (btn == "home")
+                manual.second.b2 |= 0x10;
+            else if (btn == "capture")
+                manual.second.b2 |= 0x20;
+            else if (btn == "l")
+                manual.second.b3 |= 0x40;
+            else if (btn == "r")
+                manual.second.b1 |= 0x40;
+
+            manual.first = delay;
+            manual_input = true;
+            fiber::input([] { manual_cv.notify(); });
+        }
+
+        fiber::input([] { manual_cv.notify(); });
+    }
+}
+
+template <typename T>
+bool next_bit(T &src)
+{
+    char c;
+    while (src >> c)
+    {
+        if (c == '0')
+            return false;
+        if (c == '1')
+            return true;
+    }
+    error("invalid bit");
+    return false;
+}
+
+template <typename T>
+bool parse(T &src, report_x30 *out, usize *time)
+{
+    new (out) report_x30();
+
+    std::string test;
+
+    while (true)
+    {
+        if (!(src >> test))
+            return false;
+
+        if (test == "//")
+        {
+            std::getline(src, test);
+        }
+        else
+            break;
+    }
+
+    *time = std::stoi(test, 0, 16);
+
+    out->b3 |= next_bit(src) << 1; // up
+    out->b3 |= next_bit(src) << 0; // down
+    out->b3 |= next_bit(src) << 3; // left
+    out->b3 |= next_bit(src) << 2; // right
+
+    out->b1 |= next_bit(src) << 3; // a
+    out->b1 |= next_bit(src) << 2; // b
+    out->b1 |= next_bit(src) << 1; // x
+    out->b1 |= next_bit(src) << 0; // y
+
+    out->b3 |= next_bit(src) << 7; // l
+    out->b1 |= next_bit(src) << 7; // r
+    out->b1 |= next_bit(src) << 8; // zl
+    out->b3 |= next_bit(src) << 8; // zr
+
+    out->b2 |= next_bit(src) << 3; // lstick
+    out->b2 |= next_bit(src) << 2; // rstick
+
+    out->b2 |= next_bit(src) << 0; // minus
+    out->b2 |= next_bit(src) << 1; // plus
+    out->b2 |= next_bit(src) << 4; // home
+    out->b2 |= next_bit(src) << 5; // capture
+
+    return true;
+}
 
 void fake_pro()
 {
@@ -314,38 +465,17 @@ void fake_pro()
     std::unordered_map<u32, u8> SPI;
 
     fiber::create("input-loop", [&report_mode, &hid_interrupt] {
-        report_x30 sequence[] = {
-            report_x30(0x00, 0x020000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x020000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x010000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x010000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x080000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x040000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x080000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x040000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000004, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000008, 0x800, 0x800, 0x800, 0x800),
-            report_x30(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800),
-        };
-
         auto input_mode = &report_mode;
         auto c = &hid_interrupt;
 
         usize counter = 0;
+        std::deque<std::pair<usize, report_x30>> inputs;
 
-        auto prev = std::chrono::high_resolution_clock::now();
-        usize packet_counter = 0;
         while (true)
         {
+            if (++counter == 0x80)
+                counter = 0;
+
             u8 cmd[50];
             frame send_pkt(cmd, sizeof(cmd));
             send_pkt.write_u8(0xa1);
@@ -360,50 +490,48 @@ void fake_pro()
                 send_pkt.write_u16(htobs(0x8000)); // lY
                 send_pkt.write_u16(htobs(0x8000)); // rX
                 send_pkt.write_u16(htobs(0x8000)); // rY
+                c->send(block(cmd, send_pkt.size));
+                fiber::delay(250);
+                continue;
             }
-            else if (*input_mode == 0x30)
+            else if (inputs.size() != 0)
             {
-                usize rate = 2;
+                auto &pair = inputs.front();
+                auto report = pair.second;
+                report.timer = counter;
+                send_pkt.write(report);
 
-                if ((counter / rate) >= sizeof(sequence) / sizeof(report_x30))
-                    counter = 0;
-
-                if ((counter / rate) < sizeof(sequence) / sizeof(report_x30))
-                {
-                    // printf("send %d\n", (int)(counter / rate));
-                    auto report = sequence[counter / rate];
-                    report.timer = counter;
-                    send_pkt.write(report);
-                }
-                else
-                {
-                    report_x30 report(0x00, 0x000000, 0x800, 0x800, 0x800, 0x800);
-                    report.timer = counter;
-                    send_pkt.write(report);
-                }
-
-                // if (counter == 0xFF)
-                //     counter = 0;
-                // else
-                ++counter;
-            }
-
-            c->send(block(cmd, send_pkt.size));
-
-            auto curr = std::chrono::high_resolution_clock::now();
-
-            if (curr - prev >= std::chrono::seconds(1))
-            {
-                printf("%zu\n", packet_counter);
-                packet_counter = 0;
-                prev = curr;
+                c->send(block(cmd, send_pkt.size));
+                printf("send %d\n", pair.first);
+                fiber::delay(pair.first);
+                inputs.pop_front();
             }
             else
             {
-                ++packet_counter;
-            }
+                manual_cv.wait();
+                if (run_script)
+                {
+                    run_script = false;
 
-            fiber::delay(8);
+                    usize delay;
+                    report_x30 report;
+
+                    std::ifstream src;
+                    src.open("inputs.txt");
+
+                    while (parse(src, &report, &delay))
+                        inputs.emplace_back(delay, report);
+
+                    printf("got %d inputs\n", inputs.size());
+                }
+                else if (manual_input)
+                {
+                    manual_input = false;
+                    inputs.emplace_back(manual);
+                    manual.second.b1 = manual.second.b2 = manual.second.b3 = 0;
+                    inputs.emplace_back(std::make_pair(50, report_x30()));
+                }
+            }
         }
     });
 
@@ -607,6 +735,11 @@ void inspect_pro()
 
         pkt.read_u8();
         auto info = pkt.advance<extended_inquiry_info>();
+
+        char tmp[50];
+        ba2str(&info->bdaddr, tmp);
+        printf("%s\n", tmp);
+
         if (info->bdaddr != pro_addr)
             continue;
 
@@ -638,6 +771,50 @@ void inspect_pro()
 
     block pkt;
     hid_interrupt.data.next(&pkt);
+
+    u8 send_data[0x100];
+    frame send(send_data, sizeof(send_data));
+
+    send.write_u8(0xa2);           // HID OUTPUT
+    send.write_u8(0x01);           // OUTPUT 0x01
+    send.write_u8(0x00);           // rumble timing
+    send.write_u8(0x00, 8);        // rumble data
+    send.write_u8(0x11);           // WRITE SPI
+    send.write_u32(htobl(0x6050)); // addr
+    send.write_u8(3 * 2);          // maximum size = 0x1d
+
+    // default:       0x323232 0xffffff
+    // purple gray:   0x5e35b1 0xbdbdbd
+    // purple yellow: 0x5e35b1 0xefef09
+
+    send.write_u8(0x5e);
+    send.write_u8(0x35);
+    send.write_u8(0xb1);
+
+    send.write_u8(0xef);
+    send.write_u8(0xef);
+    send.write_u8(0x09);
+
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+    // send.write_u8(0xFF); // maximum size = 0x1d
+
+    hid_interrupt.send(block(send_data, send.size));
+    while (true)
+        hid_interrupt.data.next(&pkt);
+    return;
 
     u8 pairing_info_buffer[0x1000];
     frame pairing_info(pairing_info_buffer, sizeof(pairing_info_buffer));
@@ -1167,16 +1344,18 @@ void configure_adapter()
     hci.set_event_mask(event_mask);
     hci.clear_event_filter();
 
-    hci.set_default_link_policy(0x0F);
+    hci.set_default_link_policy(0x07);
 
     hci.set_scan_mode(0x02);
-    hci.set_page_scan_timing(0x1000, 0x800);
-    hci.set_inquiry_scan_timing(0x1000, 0x800);
+    // hci.set_page_scan_timing(0x1000, 0x400);
+    hci.set_page_scan_timing(0x800, 0x200);
+    // hci.set_inquiry_scan_timing(0x1000, 0x400);
+    hci.set_inquiry_scan_timing(0x800, 0x200);
 
     hci.set_inquiry_mode(0x02);
 
     hci.set_pin_type(0x00);
-    hci.set_simple_pairing_mode(0x01);
+    // hci.set_simple_pairing_mode(0x01);
 
     hci.set_local_name("Pro Controller");
     // hci.set_device_class(0x01, 0x1c01);
@@ -1217,64 +1396,21 @@ int main(int argc, char **argv)
 {
     str2ba("00:1a:7d:da:71:12", &self);
     // str2ba("B8:27:EB:37:24:FF", &self); // black rpi
-    str2ba("dc:68:eb:3b:f8:46", &pro_addr);
-    str2ba("b8:8a:ec:91:17:c2", &switch_addr);
+    // str2ba("00:DB:DF:5E:03:43", &self); // laptop
 
-    int fd = open("tmp0", O_RDONLY);
-    u8 content[100 * 1024];
-    read(fd, &content, sizeof(content));
+    str2ba("dc:68:eb:3b:f8:46", &pro_addr); // mine
+    // str2ba("04:03:D6:1A:7C:12", &pro_addr); // grant's
 
-    block data(content, sizeof(content));
-    while (data.size > 0) {
-        usize idx = (usize)(data.data - content);
-        u8 type = data.read_u8();
-        u16 size = le16toh(data.read_u16());
-        auto body = data.data;
-        data.skip(size);
+    // str2ba("b8:8a:ec:91:17:c2", &switch_addr); // my switch
+    // str2ba("04:03:D6:25:A5:37", &switch_addr); // grant's
 
-        printf("@%04zx x%02x: x%04x\n", idx , type, size);
-        if (type == 0xfe) break;
-    }
-
-    return 0;
-
-    // int fd = open("pro_spi.bin", O_RDONLY);
-    // if (fd < 0)
-    // {
-    //     perror("failed to open bin");
-    //     return 1;
-    // }
-
-    // lseek(fd, 0x10000, SEEK_SET);
-
-    // u8 data[0x70000];
-    // read(fd, &data, sizeof(data));
-    // u64 check = 0xFFFFFFFFFFFFFFFF;
-
-    // usize counter = 0;
-    // usize block_start = 0;
-    // for (int i = 0; i < sizeof(data); ++i)
-    // {
-    //     auto ptr = (u64 *)&data[i];
-    //     if (*ptr != check)
-    //         continue;
-
-    //     char tmp[10];
-    //     sprintf(tmp, "tmp%zu", counter++);
-    //     int fdOut = open(tmp, O_WRONLY | O_TRUNC | O_CREAT);
-
-    //     write(fdOut, &data[block_start], i - block_start);
-    //     close(fdOut);
-    //     while (data[i] == 0xFF)
-    //         ++i;
-    // }
-
-    // return 0;
-    // fiber::create("reset", [] { csr_set_bdaddr(self); });
+    // fiber::create("reset", [] { intel_set_bdaddr(self); });
     fiber::create("main", [] {
         configure_adapter();
-        dump_pro();
+        fake_pro();
     });
+
+    std::thread(read_console).detach();
 
     while (true)
     {

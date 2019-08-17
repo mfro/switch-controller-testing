@@ -125,7 +125,7 @@ void device::acquire_slot()
 
     while (full_slots >= total_slots)
     {
-        printf("waiting\n");
+        // printf("waiting\n");
         slots_changed.wait();
     }
 
@@ -402,6 +402,9 @@ void device::event(evt_mode_change *evt)
 
 void device::event(evt_pin_code_req *evt)
 {
+    command cmd(hci, 0x01, 0x000e);
+    cmd.write(addr);
+    valid_status(cmd.run<u8>());
 }
 
 void device::event(evt_link_key_req *evt)
