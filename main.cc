@@ -275,11 +275,35 @@ struct __attribute__((packed)) report_x30
         b2 = (buttons >> 8) & 0xFF;
         b3 = (buttons >> 16) & 0xFF;
         sl1 = slx & 0xFF;
-        sl2 = ((slx >> 8) & 0x0F) | (sly & 0x0F);
+        sl2 = ((slx >> 8) & 0x0F) | ((sly & 0x0F) << 4);
         sl3 = sly >> 4;
         sr1 = srx & 0xFF;
-        sr2 = ((srx >> 8) & 0x0F) | (sry & 0x0F);
+        sr2 = ((srx >> 8) & 0x0F) | ((sry & 0x0F) << 4);
         sr3 = sry >> 4;
+    }
+
+    void set_LX(u16 value)
+    {
+        sl1 = value & 0xFF;
+        sl2 = ((value >> 8) & 0x0F) | (sl2 & 0xF0);
+    }
+
+    void set_LY(u16 value)
+    {
+        sl2 = (sl2 & 0x0F) | ((value & 0x0F) << 4);
+        sl3 = value >> 4;
+    }
+
+    void set_RX(u16 value)
+    {
+        sr1 = value & 0xFF;
+        sr2 = ((value >> 8) & 0x0F) | (sl2 & 0xF0);
+    }
+
+    void set_RY(u16 value)
+    {
+        sr2 = (sl2 & 0x0F) | ((value & 0x0F) << 4);
+        sr3 = value >> 4;
     }
 };
 
@@ -313,13 +337,13 @@ void read_console()
                 continue;
 
             if (btn == "up")
-                manual.second.b3 |= 0x02;
+                manual.second.set_LY(0xFFF);
             else if (btn == "down")
-                manual.second.b3 |= 0x01;
+                manual.second.set_LY(0x000);
             else if (btn == "left")
-                manual.second.b3 |= 0x08;
+                manual.second.set_LX(0x000);
             else if (btn == "right")
-                manual.second.b3 |= 0x04;
+                manual.second.set_LX(0xFFF);
             else if (btn == "a")
                 manual.second.b1 |= 0x08;
             else if (btn == "b")
@@ -340,10 +364,19 @@ void read_console()
                 manual.second.b3 |= 0x40;
             else if (btn == "r")
                 manual.second.b1 |= 0x40;
+            else if (btn == "zl")
+                manual.second.b3 |= 0x80;
+            else if (btn == "zr")
+                manual.second.b1 |= 0x80;
+            else if (btn == "ls")
+                manual.second.b2 |= 0x08;
+            else if (btn == "rs")
+                manual.second.b2 |= 0x04;
 
             manual.first = delay;
             manual_input = true;
             fiber::input([] { manual_cv.notify(); });
+            printf("got manual %d %d %d\n", manual.second.sl1, manual.second.sl2, manual.second.sl3);
         }
 
         fiber::input([] { manual_cv.notify(); });
@@ -385,22 +418,31 @@ bool parse(T &src, report_x30 *out, usize *time)
             break;
     }
 
-    *time = std::stoi(test, 0, 16);
+    *time = std::stoi(test, 0, 10);
 
-    out->b3 |= next_bit(src) << 1; // up
-    out->b3 |= next_bit(src) << 0; // down
-    out->b3 |= next_bit(src) << 3; // left
-    out->b3 |= next_bit(src) << 2; // right
+    if (next_bit(src))
+        out->set_LY(0xFFF);
+    if (next_bit(src))
+        out->set_LY(0x000);
+    if (next_bit(src))
+        out->set_LX(0x000);
+    if (next_bit(src))
+        out->set_LX(0xFFF);
+
+    // out->b3 |= next_bit(src) << 1; // up
+    // out->b3 |= next_bit(src) << 0; // down
+    // out->b3 |= next_bit(src) << 3; // left
+    // out->b3 |= next_bit(src) << 2; // right
 
     out->b1 |= next_bit(src) << 3; // a
     out->b1 |= next_bit(src) << 2; // b
     out->b1 |= next_bit(src) << 1; // x
     out->b1 |= next_bit(src) << 0; // y
 
-    out->b3 |= next_bit(src) << 7; // l
-    out->b1 |= next_bit(src) << 7; // r
-    out->b1 |= next_bit(src) << 8; // zl
-    out->b3 |= next_bit(src) << 8; // zr
+    out->b3 |= next_bit(src) << 6; // l
+    out->b1 |= next_bit(src) << 6; // r
+    out->b3 |= next_bit(src) << 7; // zl
+    out->b1 |= next_bit(src) << 7; // zr
 
     out->b2 |= next_bit(src) << 3; // lstick
     out->b2 |= next_bit(src) << 2; // rstick
@@ -502,7 +544,7 @@ void fake_pro()
                 send_pkt.write(report);
 
                 c->send(block(cmd, send_pkt.size));
-                printf("send %d\n", pair.first);
+                printf("send %d (%d %d %d)\n", pair.first, pair.second.b1, pair.second.b2, pair.second.b3);
                 fiber::delay(pair.first);
                 inputs.pop_front();
             }
@@ -520,7 +562,7 @@ void fake_pro()
                     src.open("inputs.txt");
 
                     while (parse(src, &report, &delay))
-                        inputs.emplace_back(delay, report);
+                        inputs.emplace_back(delay * 16, report);
 
                     printf("got %d inputs\n", inputs.size());
                 }
@@ -528,8 +570,12 @@ void fake_pro()
                 {
                     manual_input = false;
                     inputs.emplace_back(manual);
-                    manual.second.b1 = manual.second.b2 = manual.second.b3 = 0;
                     inputs.emplace_back(std::make_pair(50, report_x30()));
+                    manual.second.set_LX(0x800);
+                    manual.second.set_LY(0x800);
+                    manual.second.set_RX(0x800);
+                    manual.second.set_RY(0x800);
+                    manual.second.b1 = manual.second.b2 = manual.second.b3 = 0;
                 }
             }
         }
@@ -1401,10 +1447,10 @@ int main(int argc, char **argv)
     str2ba("dc:68:eb:3b:f8:46", &pro_addr); // mine
     // str2ba("04:03:D6:1A:7C:12", &pro_addr); // grant's
 
-    // str2ba("b8:8a:ec:91:17:c2", &switch_addr); // my switch
+    str2ba("b8:8a:ec:91:17:c2", &switch_addr); // my switch
     // str2ba("04:03:D6:25:A5:37", &switch_addr); // grant's
 
-    // fiber::create("reset", [] { intel_set_bdaddr(self); });
+    // fiber::create("reset", [] { csr_set_bdaddr(pro_addr); });
     fiber::create("main", [] {
         configure_adapter();
         fake_pro();
